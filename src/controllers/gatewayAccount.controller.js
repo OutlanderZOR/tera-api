@@ -14,7 +14,6 @@ const validator = require("validator");
 const Benefit = require("../actions/handlers/benefit");
 const env = require("../utils/env");
 const helpers = require("../utils/helpers");
-const proxyWebhook = require("../utils/proxyWebhook");
 const { validationHandler, writeOperationReport } = require("../middlewares/gateway.middlewares");
 
 /**
@@ -495,9 +494,9 @@ module.exports.SetPasswordByUserNo = modules => [
 
 /**
  * Mints a launcher game session for an account without a password (server-to-server). Mirrors the portal
- * launcher's GetAuthKeyAction: generate a fresh AuthKey, persist it on the account row, and fire the
- * connection-gate proxy grant for the player's real IP (passed by the reforged-backend). The arbiter then
- * validates UserNo + AuthKey at game-server connect.
+ * launcher's GetAuthKeyAction: generate a fresh AuthKey and persist it on the account row together with
+ * the player's real IP (passed by the reforged-backend). The arbiter then validates UserNo + AuthKey at
+ * game-server connect.
  * @param {modules} modules
  */
 module.exports.IssueAuthKey = ({ logger, localization, config, accountModel }) => [
@@ -531,15 +530,6 @@ module.exports.IssueAuthKey = ({ logger, localization, config, accountModel }) =
 			{ authKey, lastLoginIP: ip },
 			{ where: { accountDBID: account.get("accountDBID") } }
 		);
-
-		// Push a launcher grant to the connection-gate proxy (fire-and-forget) for the player's real IP,
-		// so the grant lands ahead of the game client's connection. Mirrors GetAuthKeyAction.
-		proxyWebhook.notifyLauncherGrant({
-			ip,
-			accountId: account.get("accountDBID"),
-			name: account.get("userName"),
-			authKey
-		});
 
 		res.json({
 			Return: true,

@@ -17,7 +17,6 @@ const Benefit = require("../actions/handlers/benefit");
 const Shop = require("../actions/handlers/shop");
 const env = require("../utils/env");
 const helpers = require("../utils/helpers");
-const proxyWebhook = require("../utils/proxyWebhook");
 const SliderCaptcha = require("../utils/sliderCaptcha");
 
 const {
@@ -946,15 +945,6 @@ module.exports.GetAuthKeyAction = ({ rateLimitter, accountModel }) => [
 			...ipFromLauncher ? { lastLoginIP: req.ip } : {}
 		}, {
 			where: { accountDBID: req.user.accountDBID }
-		});
-
-		// Push a launcher grant to the connection-gate proxy (fire-and-forget). This is the "Play"
-		// moment, just before the game client connects, so the grant lands ahead of the proxy connection.
-		proxyWebhook.notifyLauncherGrant({
-			ip: req.ip,
-			accountId: req.user.accountDBID,
-			name: req.user.userName,
-			authKey
 		});
 
 		res.json({
