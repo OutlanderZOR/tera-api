@@ -38,6 +38,7 @@ require("dotenv").config();
 
 const path = require("path");
 
+const env = require("./utils/env");
 const { createLogger } = require("./utils/logger");
 const cliHelper = require("./utils/cliHelper");
 const LocalizationManager = require("./lib/localizationManager");
@@ -161,7 +162,22 @@ function checkComponent(name) {
 	return !cliOptions.component || cliOptions.component.includes(name);
 }
 
-loadModules().then(startServers).catch(err => {
+// Boot watchdog: a boot that stalls leaves a live process with no listeners, which no restart
+// policy can recover from. Exiting non-zero hands recovery back to the container runtime.
+// Covers a stall that leaves the event loop alive. A synchronous block or a blocked syscall
+// would prevent this timer from firing, so it is not covered here.
+const bootTimeout = env.number("BOOT_TIMEOUT", 180);
+
+const bootWatchdog = bootTimeout > 0 ? setTimeout(() => {
+	logger.error(`Boot watchdog: startup did not complete within ${bootTimeout} seconds, exiting.`);
+	process.exit(1);
+}, bootTimeout * 1000) : null;
+
+loadModules().then(startServers).then(() => {
+	clearTimeout(bootWatchdog);
+}).catch(err => {
+	clearTimeout(bootWatchdog);
+
 	if (err) {
 		logger.error(err);
 	}
