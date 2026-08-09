@@ -6,10 +6,15 @@ const struct = require("python-struct");
 
 const HubConnection = require("../../src/lib/hubConnection");
 const hub = require("../../src/lib/protobuf/hub").proto_hub;
+const HubError = require("../../src/lib/hubError");
+const { serverCategory } = require("../../src/lib/teraPlatformGuid");
 const { noopLogger } = require("../helpers/http");
 
+const REGISTER_ANS = 2; // hubFunctionMap key for RegisterAns
 const SERVER_EVENT = 8; // hubFunctionMap key for ServerEvent
 const PING_REQ = 6; // hubFunctionMap key borrowed by the throwing-handler test
+
+const BIAS_LIMIT = 10000; // register() gives up once biasCount climbs past this
 
 const CONNECTED = 1;
 const DISCONNECTED = 2;
@@ -46,6 +51,40 @@ function createRecordingLogger() {
 
 function createConnection(logger = createRecordingLogger()) {
 	return { conn: new HubConnection("127.0.0.1", 11001, { logger }), logger };
+}
+
+/**
+ * Puts a connection into the state register() expects without a socket: connected, with a stub that
+ * reports a local endpoint and accepts writes.
+ */
+function createRegistrableConnection() {
+	const { conn, logger } = createConnection();
+
+	conn.serviceId = serverCategory.webcstool;
+	conn.connected = true;
+	conn.socket = {
+		socket: { localAddress: "127.0.0.1", localPort: 12345 },
+		write: async () => undefined
+	};
+
+	return { conn, logger };
+}
+
+/** Fails the promise rather than letting an unsettled one stall the runner. */
+function withTimeout(promise, ms) {
+	let timer = null;
+
+	return Promise.race([
+		promise.finally(() => clearTimeout(timer)),
+		new Promise((resolve, reject) => {
+			timer = setTimeout(() => reject(new Error(`promise did not settle within ${ms} ms`)), ms);
+		})
+	]);
+}
+
+/** Resolves once every pending microtask has run, so register()'s listener is attached. */
+function flushMicrotasks() {
+	return new Promise(resolve => setImmediate(resolve));
 }
 
 describe("HubConnection.recv", () => {
@@ -89,5 +128,30 @@ describe("HubConnection.recv", () => {
 		assert.equal(logger.errors.length, 1);
 		assert.match(String(logger.errors[0]), /handler blew up/);
 		assert.ok(conn.watchServerCategories[CATEGORY].has(SERVER_ID));
+	});
+});
+
+describe("HubConnection.register", () => {
+	test("register rejects instead of hanging once biasCount exceeds its limit", async () => {
+		const { conn } = createRegistrableConnection();
+
+		conn.biasCount = BIAS_LIMIT; // the next failed answer pushes it past the limit
+
+		const registered = conn.register();
+
+		// register() computes uniqueServerId synchronously, but attaches its listener only after
+		// send() resolves, so the answer has to wait for the microtask queue to drain.
+		await flushMicrotasks();
+
+		// A RegisterAns with a falsy result makes the handler emit null, which is the give-up path.
+		conn.recv(frame(REGISTER_ANS, hub.RegisterAns.encode({ result: false }).finish()));
+
+		await assert.rejects(withTimeout(registered, 1000), err => {
+			assert.ok(err instanceof HubError, `expected HubError, got ${err}`);
+			assert.match(err.message, /Can't register server/);
+			return true;
+		});
+
+		assert.equal(conn.isRegistered, false);
 	});
 });

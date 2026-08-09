@@ -152,7 +152,7 @@ class HubConnection extends EventEmitter {
 					this.biasCount++;
 
 					if (this.biasCount > 10000) {
-						return Promise.reject(new HubError("Can't register server", 0x000FE002));
+						return reject(new HubError("Can't register server", 0x000FE002));
 					}
 
 					return this.connect().then(() =>
