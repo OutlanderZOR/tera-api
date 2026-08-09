@@ -330,7 +330,8 @@ class HubConnection extends EventEmitter {
 
 			this.watchServerCategories[category].add(res.serverId);
 		} else {
-			this.watchServerCategories[category].remove(res.server_id);
+			// Optional chain covers a DISCONNECTED event for a category never seen CONNECTED.
+			this.watchServerCategories[category]?.delete(res.serverId);
 		}
 	}
 
@@ -388,7 +389,15 @@ class HubConnection extends EventEmitter {
 				continue;
 			}
 
-			this.hubFunctionMap[msgId](Uint8Array.prototype.slice.call(body, this.idSize));
+			// A malformed or unexpected message must not take the process down with it: this runs from
+			// the socket "data" event, so a throw here has no caller to catch it.
+			try {
+				this.hubFunctionMap[msgId](Uint8Array.prototype.slice.call(body, this.idSize));
+			} catch (err) {
+				if (this.params.logger?.error) {
+					this.params.logger.error(`Handler for received message ${msgId} failed: ${err}`);
+				}
+			}
 		}
 	}
 
