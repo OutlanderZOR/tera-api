@@ -22,7 +22,10 @@ module.exports = async () => {
 		}
 	);
 
-	await hub.connect();
+	// Not awaited: the hub must not be a boot-blocking dependency. connect() arms its own 10 second
+	// retry interval synchronously and swallows connect errors, so registration completes in the
+	// background while the API listeners bind on schedule.
+	hub.connect();
 
 	return hub;
 };
