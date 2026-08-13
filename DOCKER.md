@@ -150,7 +150,44 @@ docker compose exec mysql mysql -uroot -pteraapi teraapi
 
 To back up: snapshot the `mysql_data` volume (`docker run --rm -v tera-api_mysql_data:/d -v $PWD:/b alpine tar czf /b/db.tgz -C /d .`) plus the bind-mounted dirs.
 
-## 11. Troubleshooting
+## 11. OpenTelemetry tracing (optional)
+
+The instrumentation packages ship in the image but nothing loads them unless `NODE_OPTIONS` carries the zero-code hook. Leave `NODE_OPTIONS` unset and the container behaves exactly as before.
+
+```yaml
+services:
+  tera-api:
+    environment:
+      NODE_OPTIONS: "--require @opentelemetry/auto-instrumentations-node/register"
+      OTEL_SERVICE_NAME: "tera-api"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318"
+      OTEL_TRACES_EXPORTER: "otlp"
+      OTEL_METRICS_EXPORTER: "none"
+      OTEL_LOGS_EXPORTER: "none"
+      OTEL_NODE_ENABLED_INSTRUMENTATIONS: "http,express,mysql2,tedious"
+      OTEL_NODE_RESOURCE_DETECTORS: "env,host,os,process,serviceinstance,container"
+      OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+      OTEL_TRACES_SAMPLER_ARG: "0.1"
+```
+
+| Key | Why |
+|---|---|
+| `NODE_OPTIONS` | The only switch. Loads the hook before `src/app.js` runs. |
+| `OTEL_SERVICE_NAME` | The node name in a service graph. All four components share one process, so they share one name. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL. Port `4318` is OTLP/HTTP; the SDK default protocol is `http/protobuf` and it appends `/v1/traces`. |
+| `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` | Both default to `otlp` when unset. Set `none` for traces only; container logs already reach the log stack over stdout. |
+| `OTEL_NODE_ENABLED_INSTRUMENTATIONS` | Allowlist. `http` pairs the inbound SERVER span, `express` supplies `http.route`, `mysql2` covers Sequelize, `tedious` covers the Planet (MSSQL) databases. |
+| `OTEL_NODE_RESOURCE_DETECTORS` | Without it the SDK probes the AWS/GCP/Azure metadata endpoints on every boot, which times out slowly on a plain VM. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_traceidratio` honors a decision already made by the caller, which is what keeps a cross-service trace whole. The ratio only applies to traces that start here. |
+
+Notes:
+
+- These must be real container environment variables (`environment:` or `env_file:`). The hook runs before `src/app.js` calls `dotenv`, so `OTEL_*` keys written into `.env` are invisible to it.
+- Instrumentation short names are the suffix of the `@opentelemetry/instrumentation-*` package name. An unrecognized name is ignored without a warning, so a typo silently drops that instrumentation.
+- Trace context is W3C `traceparent`, propagated by default. The app sends no CORS headers of its own, so a browser caller must reach it same-origin through a reverse proxy for the header to survive.
+- The Platform Hub link is a raw TCP protobuf socket and stays uninstrumented.
+
+## 12. Troubleshooting
 
 **App crash-loops with `Could not find datasheets for Portal API language: en`** — DataCenter file missing or wrong region. See step 4.
 
